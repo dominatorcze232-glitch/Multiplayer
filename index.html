@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Panda Multiplayer</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; background: #e0f0e0; }
+        #auth-screen { position: absolute; inset: 0; background: white; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; }
+        #game-ui { position: absolute; top: 10px; left: 10px; pointer-events: none; }
+        .player { position: absolute; width: 50px; height: 50px; transition: all 0.2s linear; text-align: center; }
+        .panda-normal { background: url('https://cdn-icons-png.flaticon.com/512/235/235371.png') no-repeat center/contain; }
+        .panda-rare { background: url('https://cdn-icons-png.flaticon.com/512/3209/3209865.png') no-repeat center/contain; filter: sepia(1) saturate(5) hue-rotate(10deg); }
+        .chovatel { background: url('https://cdn-icons-png.flaticon.com/512/1995/1995531.png') no-repeat center/contain; }
+        .roll { animation: roll 0.5s linear infinite; }
+        @keyframes roll { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        #bowl { position: absolute; bottom: 50px; right: 50px; width: 80px; height: 40px; background: #8B4513; border-radius: 0 0 40px 40px; text-align: center; color: white; }
+        #roll-btn { position: fixed; bottom: 20px; right: 20px; padding: 15px; background: orange; border: none; border-radius: 50%; cursor: pointer; display: none; pointer-events: auto; }
+    </style>
+</head>
+<body>
+
+<div id="auth-screen">
+    <h1>Panda Svět</h1>
+    <input type="text" id="username" placeholder="Tvoje přezdívka">
+    <select id="role">
+        <option value="panda_normal">Panda Veliká</option>
+        <option value="panda_rare">Panda Vzácná (Hnědá)</option>
+        <option value="chovatel">Chovatel</option>
+    </select>
+    <button onclick="startGame()">Vstoupit do hry</button>
+</div>
+
+<div id="game-ui">
+    <h2 id="status">Připojování...</h2>
+</div>
+
+<div id="bowl">Jídlo: <span id="food-level">0</span></div>
+<button id="roll-btn" onclick="triggerRoll()">Zkutálet se!</button>
+
+<div id="game-world"></div>
+
+<!-- Firebase SDK -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, remove, update, onDisconnect } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyAYA_Y3SpzdwQNklKFoa3HZiJPT8kxqjO8",
+        authDomain: "multiplayer-cf14f.firebaseapp.com",
+        projectId: "multiplayer-cf14f",
+        storageBucket: "multiplayer-cf14f.firebasestorage.app",
+        messagingSenderId: "1042297372152",
+        appId: "1:1042297372152:web:8d9907215d13682ed52a0d",
+        measurementId: "G-2MC5YTDWKY"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    let myId = Math.random().toString(36).substring(7);
+    let myData = {};
+
+    window.startGame = () => {
+        const name = document.getElementById('username').value;
+        const role = document.getElementById('role').value;
+        if(!name) return alert("Zadej jméno!");
+
+        myData = {
+            id: myId,
+            name: name,
+            role: role,
+            x: Math.random() * window.innerWidth * 0.8,
+            y: Math.random() * window.innerHeight * 0.8,
+            isRolling: false,
+            isSick: false
+        };
+
+        document.getElementById('auth-screen').style.display = 'none';
+        if(role.includes('panda')) document.getElementById('roll-btn').style.display = 'block';
+
+        // Reference na našeho hráče
+        const playerRef = ref(db, 'players/' + myId);
+        set(playerRef, myData);
+        onDisconnect(playerRef).remove();
+
+        setupControls();
+        setupGameSync();
+    };
+
+    function setupControls() {
+        window.addEventListener('keydown', (e) => {
+            const step = 15;
+            if(e.key === "ArrowLeft") myData.x -= step;
+            if(e.key === "ArrowRight") myData.x += step;
+            if(e.key === "ArrowUp") myData.y -= step;
+            if(e.key === "ArrowDown") myData.y += step;
+            
+            update(ref(db, 'players/' + myId), { x: myData.x, y: myData.y });
+        });
+    }
+
+    window.triggerRoll = () => {
+        update(ref(db, 'players/' + myId), { isRolling: true });
+        setTimeout(() => update(ref(db, 'players/' + myId), { isRolling: false }), 1000);
+    };
+
+    function setupGameSync() {
+        // Synchronizace hráčů
+        onValue(ref(db, 'players'), (snapshot) => {
+            const players = snapshot.val() || {};
+            const world = document.getElementById('game-world');
+            world.innerHTML = '';
+            
+            Object.values(players).forEach(p => {
+                const div = document.createElement('div');
+                div.className = `player ${p.role === 'chovatel' ? 'chovatel' : (p.role === 'panda_rare' ? 'panda-rare' : 'panda-normal')} ${p.isRolling ? 'roll' : ''}`;
+                div.style.left = p.x + 'px';
+                div.style.top = p.y + 'px';
+                div.innerHTML = `<div style="margin-top:-20px; font-weight:bold">${p.name} ${p.isSick ? '🤒' : ''}</div>`;
+                
+                // Interakce pro chovatele (kliknutím na pandu ji vyléčí)
+                if(myData.role === 'chovatel' && p.role.includes('panda')) {
+                    div.onclick = () => update(ref(db, 'players/' + p.id), { isSick: false });
+                }
+
+                world.appendChild(div);
+            });
+        });
+
+        // Miska s jídlem
+        onValue(ref(db, 'bowl'), (snapshot) => {
+            const food = snapshot.val() || 0;
+            document.getElementById('food-level').innerText = food;
+        });
+    }
+
+    // Speciální akce
+    setInterval(() => {
+        if(!myData.role) return;
+
+        // Chovatel doplňuje jídlo automaticky, když je u misky
+        if(myData.role === 'chovatel' && myData.x > window.innerWidth - 150 && myData.y > window.innerHeight - 150) {
+             update(ref(db, 'bowl'), Math.floor(Math.random() * 100));
+        }
+
+        // Panda jí jídlo
+        if(myData.role.includes('panda') && myData.x > window.innerWidth - 150 && myData.y > window.innerHeight - 150) {
+             // Zde by byla logika pro odečtení jídla
+        }
+
+        // Náhodná nemoc pro pandy
+        if(myData.role.includes('panda') && Math.random() < 0.01 && !myData.isSick) {
+            update(ref(db, 'players/' + myId), { isSick: true });
+        }
+    }, 3000);
+</script>
+</body>
+</html>
